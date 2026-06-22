@@ -70,7 +70,7 @@ export default function StudentDashboard() {
 
       {/* Active Session Notification */}
       {activeSessions.map(session => {
-        const isMarked = logs.some(l => l.date === todayStr && l.type && l.type.includes(session.classCode));
+        const isMarked = logs.some(l => l.date === todayStr && l.type && l.type.includes(session.classCode) && l.status === 'Present');
         
         if (isMarked) {
           return (

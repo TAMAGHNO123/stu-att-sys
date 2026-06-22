@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { Card, Avatar, Row, Col, Button, Modal, message } from 'antd';
+import { useRef, useState, useEffect } from 'react';
+import { Card, Avatar, Row, Col, Button, Modal, message, Alert } from 'antd';
 import { CameraOutlined } from '@ant-design/icons';
 import PageHeader from '../../components/common/PageHeader';
 import { useOutletContext } from 'react-router-dom';
@@ -11,6 +11,23 @@ export default function StudentProfile() {
   const currentUser = currentUserStr ? JSON.parse(currentUserStr) : null;
   const [faceModalOpen, setFaceModalOpen] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
+  const [pendingRequest, setPendingRequest] = useState(null);
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await studentAPI.getReenrollStatus();
+        if (res && res.has_pending) {
+          setPendingRequest(res.request);
+        } else {
+          setPendingRequest(null);
+        }
+      } catch (err) {
+        console.error("Error fetching face re-enrollment status:", err);
+      }
+    };
+    fetchStatus();
+  }, []);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -50,10 +67,15 @@ export default function StudentProfile() {
         samples.push(canvas.toDataURL('image/jpeg', 0.9));
         await new Promise((resolve) => setTimeout(resolve, 450));
       }
-      const result = await studentAPI.uploadOwnFaceImages(samples);
-      message.success(`Face ID updated from ${result.samples_enrolled} clear sample(s).`);
+      await studentAPI.requestReenroll(samples);
+      message.success("Face scan captured! Your re-enrollment request has been submitted for admin approval.");
       stopEnrollmentCamera();
       setFaceModalOpen(false);
+      // Re-fetch pending status immediately
+      const res = await studentAPI.getReenrollStatus();
+      if (res && res.has_pending) {
+        setPendingRequest(res.request);
+      }
     } catch (error) {
       message.error(error.message || 'Face ID enrollment failed.');
     } finally {
@@ -258,6 +280,16 @@ export default function StudentProfile() {
 
       <PageHeader title="My Profile" subtitle="Manage and view your official profile information" breadcrumbs={[{ label: 'My Profile' }]} />
 
+      {pendingRequest && (
+        <Alert
+          message="Face ID Re-enrollment Pending Admin Approval"
+          description="Your captured face scan has been submitted. An admin must verify and approve it before your Face ID is updated."
+          type="warning"
+          showIcon
+          style={{ marginBottom: 20, borderRadius: 12, maxWidth: 900 }}
+        />
+      )}
+
       <Card className="profile-card" bodyStyle={{ padding: 0 }}>
         {/* Banner strip */}
         <div className="profile-header-bg"></div>
@@ -286,8 +318,13 @@ export default function StudentProfile() {
               <p className="profile-student-id" style={{ margin: 0, color: 'rgba(255, 255, 255, 0.9)', fontSize: 14, fontWeight: 600 }}>
                 Student ID: {currentStudent.rollNumber}
               </p>
-              <Button icon={<CameraOutlined />} onClick={openFaceEnrollment} style={{ marginTop: 14 }}>
-                Re-enroll Face ID
+              <Button 
+                icon={<CameraOutlined />} 
+                onClick={openFaceEnrollment} 
+                style={{ marginTop: 14 }}
+                disabled={!!pendingRequest}
+              >
+                {pendingRequest ? "Re-enrollment Pending Approval" : "Re-enroll Face ID"}
               </Button>
             </Col>
           </Row>

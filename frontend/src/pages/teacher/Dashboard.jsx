@@ -134,23 +134,50 @@ const STREAMS = [
   },
 ];
 
-const curriculumStream = (label, value, prefix, semesters) => ({
-  label, value, prefix,
-  years: [1, 2, 3, 4].map((year) => ({
-    label: `${year}${year === 1 ? 'st' : year === 2 ? 'nd' : year === 3 ? 'rd' : 'th'} Year`,
-    value: String(year),
-    semesters: [year * 2 - 1, year * 2]
-      .filter((semester) => semesters[semester])
-      .map((semester) => ({
-        label: `Semester ${semester}`,
-        value: String(semester),
-        subjects: semesters[semester].map(([code, name], index) => [
-          `${prefix}-${semester}${String(index + 1).padStart(2, '0')}`,
-          `${name} (${code})`,
-        ]),
-      })),
-  })),
-});
+const FIRST_YEAR_SEMESTERS = {
+  1: [
+    ['BS-M101', 'Mathematics-IA'],
+    ['BS-PH101', 'Physics-I'],
+    ['ES-EE101', 'Basic Electrical Engineering'],
+    ['BS-PH191', 'Physics-I Laboratory'],
+    ['ES-EE191', 'Basic Electrical Engineering Lab'],
+    ['ES-ME192', 'Workshop'],
+  ],
+  2: [
+    ['BS-CH201', 'Chemistry-I'],
+    ['BS-M201', 'Mathematics-IIA'],
+    ['ES-CS201', 'Programming for Problem Solving'],
+    ['HM-HU201', 'English'],
+    ['BS-CH291', 'Chemistry-I Laboratory'],
+    ['ES-CS291', 'Programming for Problem Solving Lab'],
+    ['ES-ME291', 'Engineering Graphics & Design'],
+    ['HM-HU291', 'Language Laboratory'],
+  ]
+};
+
+const curriculumStream = (label, value, prefix, semesters) => {
+  const mergedSemesters = {
+    ...FIRST_YEAR_SEMESTERS,
+    ...semesters
+  };
+  return {
+    label, value, prefix,
+    years: [1, 2, 3, 4].map((year) => ({
+      label: `${year}${year === 1 ? 'st' : year === 2 ? 'nd' : year === 3 ? 'rd' : 'th'} Year`,
+      value: String(year),
+      semesters: [year * 2 - 1, year * 2]
+        .filter((semester) => mergedSemesters[semester])
+        .map((semester) => ({
+          label: `Semester ${semester}`,
+          value: String(semester),
+          subjects: mergedSemesters[semester].map(([code, name], index) => [
+            `${prefix}-${semester}${String(index + 1).padStart(2, '0')}`,
+            `${name} (${code})`,
+          ]),
+        })),
+    })),
+  };
+};
 
 STREAMS.push(
   curriculumStream('Electronics & Communication', 'Electronics & Communication', 'EC', {
@@ -203,6 +230,15 @@ aimlStream.years.forEach((year) => year.semesters.forEach((semester) => {
   semester.subjects = semester.subjects.map(([code, name]) => [code.replace(/^CS-/, 'AIML-'), name]);
 }));
 STREAMS.push(aimlStream);
+
+const itStream = JSON.parse(JSON.stringify(STREAMS[0]));
+itStream.label = 'Information Technology';
+itStream.value = 'Information Technology';
+itStream.prefix = 'IT';
+itStream.years.forEach((year) => year.semesters.forEach((semester) => {
+  semester.subjects = semester.subjects.map(([code, name]) => [code.replace(/^CS-/, 'IT-'), name]);
+}));
+STREAMS.push(itStream);
 
 export default function FacultyDashboard() {
   const navigate = useNavigate();

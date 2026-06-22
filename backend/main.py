@@ -1224,6 +1224,219 @@ async def enroll_current_student_faces(
         raise HTTPException(status_code=404, detail="Student profile not found")
     return await enroll_student_faces(student["id"], request, current_user)
 
+@app.post("/api/student/face-images/request", dependencies=[Depends(require_role(["student"]))])
+async def request_student_face_reenroll(
+    request: FaceEnrollRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, rollnumber, fullname FROM students WHERE rollnumber = %s",
+            (current_user.get("referenceId"),),
+        )
+        student = cursor.fetchone()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student profile not found")
+        
+        # Check if there is already a pending request
+        cursor.execute(
+            "SELECT id FROM face_reenroll_requests WHERE student_id = %s AND status = 'pending'",
+            (student["id"],),
+        )
+        if cursor.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail="You already have a pending face re-enrollment request. Please wait for admin approval."
+            )
+
+        # Average proposed samples to get proposed embedding
+        embeddings = []
+        for b64_img in request.images:
+            frame = decode_base64_image(b64_img)
+            if frame is None:
+                continue
+            embedding, _, _, _ = await run_in_threadpool(extract_face_embedding, frame)
+            if embedding:
+                embeddings.append(np.asarray(embedding, dtype=np.float32))
+
+        if not embeddings:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not detect any faces in the provided samples. Ensure proper lighting and try again."
+            )
+
+        averaged = np.mean(embeddings, axis=0)
+        norm = np.linalg.norm(averaged)
+        if norm > 0:
+            averaged = averaged / norm
+            
+        # Upload the first sample image as a pending photo
+        from storage import upload_profile_photo
+        proposed_photo_url = upload_profile_photo(request.images[0], f"pending_{student['rollnumber']}")
+        
+        # Insert request
+        cursor.execute("""
+            INSERT INTO face_reenroll_requests (student_id, rollnumber, fullname, proposed_photo, proposed_embedding)
+            VALUES (%s, %s, %s, %s, %s::vector)
+        """, (student["id"], student["rollnumber"], student["fullname"], proposed_photo_url, str(averaged.tolist())))
+        conn.commit()
+
+    return {"success": True, "message": "Face re-enrollment request submitted successfully."}
+
+@app.get("/api/student/face-images/request-status", dependencies=[Depends(require_role(["student"]))])
+async def get_student_reenroll_status(current_user: dict = Depends(get_current_user)):
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM students WHERE rollnumber = %s",
+            (current_user.get("referenceId"),),
+        )
+        student = cursor.fetchone()
+        if not student:
+            return {"has_pending": False, "request": None}
+            
+        cursor.execute("""
+            SELECT id, status, proposed_photo, created_at FROM face_reenroll_requests
+            WHERE student_id = %s AND status = 'pending'
+            LIMIT 1
+        """, (student["id"],))
+        req = cursor.fetchone()
+        
+    if req:
+        return {
+            "has_pending": True,
+            "request": {
+                "id": req["id"],
+                "status": req["status"],
+                "proposedPhoto": req["proposed_photo"],
+                "createdAt": req["created_at"].isoformat() if req["created_at"] else None
+            }
+        }
+    return {"has_pending": False, "request": None}
+
+@app.get("/api/admin/face-images/requests", dependencies=[Depends(require_role(["admin"]))])
+async def get_admin_reenroll_requests():
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT r.id, r.student_id, r.rollnumber, r.fullname, r.status, r.proposed_photo, r.created_at,
+                   s.photo AS original_photo,
+                   (s.embedding <=> r.proposed_embedding) AS distance
+            FROM face_reenroll_requests r
+            JOIN students s ON s.id = r.student_id
+            WHERE r.status = 'pending'
+            ORDER BY r.created_at DESC
+        """)
+        rows = cursor.fetchall()
+        
+    requests = []
+    for r in rows:
+        requests.append({
+            "id": r["id"],
+            "studentId": r["student_id"],
+            "rollNumber": r["rollnumber"],
+            "fullName": r["fullname"],
+            "status": r["status"],
+            "proposedPhoto": r["proposed_photo"],
+            "originalPhoto": r["original_photo"],
+            "distance": float(r["distance"]) if r["distance"] is not None else None,
+            "createdAt": r["created_at"].isoformat() if r["created_at"] else None
+        })
+    return {"requests": requests}
+
+@app.post("/api/admin/face-images/requests/{request_id}/approve", dependencies=[Depends(require_role(["admin"]))])
+async def approve_reenroll_request(request_id: int, current_user: dict = Depends(get_current_user)):
+    with db_session() as conn:
+        cursor = conn.cursor()
+        # Find request details
+        cursor.execute("""
+            SELECT r.student_id, r.rollnumber, r.fullname, r.proposed_photo, r.proposed_embedding
+            FROM face_reenroll_requests r
+            WHERE r.id = %s AND r.status = 'pending'
+        """, (request_id,))
+        req = cursor.fetchone()
+        if not req:
+            raise HTTPException(status_code=404, detail="Pending request not found.")
+            
+        student_id = req["student_id"]
+        rollnumber = req["rollnumber"]
+        fullname = req["fullname"]
+        proposed_embedding = req["proposed_embedding"]
+        
+        # Promote proposed photo to permanent
+        from storage import promote_pending_photo
+        permanent_photo_url = promote_pending_photo(rollnumber)
+        
+        # Update students table
+        cursor.execute("""
+            UPDATE students
+            SET embedding = %s::vector, photo = %s, status = 'Active'
+            WHERE id = %s
+        """, (str(proposed_embedding), permanent_photo_url, student_id))
+        
+        # Update users table
+        cursor.execute("""
+            UPDATE users
+            SET status = 'Active'
+            WHERE role = 'student' AND referenceid = %s
+        """, (rollnumber,))
+        
+        # Retrieve student details to sync session roster
+        cursor.execute("SELECT department, semester FROM students WHERE id = %s", (student_id,))
+        student_detail = cursor.fetchone()
+        if student_detail:
+            # Sync active session roster
+            cursor.execute("""
+                INSERT INTO attendance_session_roster (
+                    sessionid, studentid, rollnumber, studentname, department, semester
+                )
+                SELECT id, %s, %s, %s, %s, %s
+                FROM attendance_sessions
+                WHERE isactive = TRUE
+                  AND LOWER(department) = LOWER(%s)
+                  AND semester = %s
+                ON CONFLICT (sessionid, rollnumber) DO UPDATE SET studentid = EXCLUDED.studentid
+            """, (
+                student_id, rollnumber, fullname,
+                student_detail["department"], str(student_detail["semester"]),
+                student_detail["department"], str(student_detail["semester"]),
+            ))
+            
+        # Update request status
+        cursor.execute("""
+            UPDATE face_reenroll_requests
+            SET status = 'approved'
+            WHERE id = %s
+        """, (request_id,))
+        
+        conn.commit()
+        
+    log_action(f"Approved face re-enrollment for {rollnumber} ({fullname})", current_user.get("email"), "Success")
+    return {"success": True, "message": "Face re-enrollment request approved successfully."}
+
+@app.post("/api/admin/face-images/requests/{request_id}/reject", dependencies=[Depends(require_role(["admin"]))])
+async def reject_reenroll_request(request_id: int, current_user: dict = Depends(get_current_user)):
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT rollnumber, fullname FROM face_reenroll_requests
+            WHERE id = %s AND status = 'pending'
+        """, (request_id,))
+        req = cursor.fetchone()
+        if not req:
+            raise HTTPException(status_code=404, detail="Pending request not found.")
+            
+        cursor.execute("""
+            UPDATE face_reenroll_requests
+            SET status = 'rejected'
+            WHERE id = %s
+        """, (request_id,))
+        conn.commit()
+        
+    log_action(f"Rejected face re-enrollment for {req['rollnumber']} ({req['fullname']})", current_user.get("email"), "Info")
+    return {"success": True, "message": "Face re-enrollment request rejected."}
+
 # ─── Attendance Records ───────────────────────────────────────
 @app.get("/api/attendance/session-history", dependencies=[Depends(require_role(["admin", "teacher"]))])
 async def get_attendance_session_history(
@@ -1369,6 +1582,7 @@ async def get_student_attendance(current_user: dict = Depends(get_current_user))
                    a.verification_method, a.face_confidence, a.distance_meters,
                    CASE
                        WHEN a.status = 'Present' THEN 'Present'
+                       WHEN a.status = 'Absent' THEN 'Absent'
                        WHEN s.isactive = TRUE THEN 'Pending'
                        ELSE 'Absent'
                    END AS computed_status
@@ -2123,15 +2337,15 @@ async def scan_attendance(request: ScanRequest, current_user: Optional[dict] = D
                 
                 session_id = session_context["id"] if session_context else None
                 cursor.execute("""
-                    SELECT COUNT(*) FROM attendance
+                    SELECT status FROM attendance
                     WHERE rollnumber = %s
                       AND sessionid = %s
-                      AND status = 'Present'
                 """, (roll, session_id))
+                existing_row = cursor.fetchone()
                 
-                if cursor.fetchone()[0] == 0:
-                    # Force UTC timestamp internally
-                    utc_now_iso = get_utc_now().isoformat()
+                utc_now_iso = get_utc_now().isoformat()
+                if not existing_row:
+                    new_status = 'Present'
                     cursor.execute("""
                         INSERT INTO attendance (
                             rollnumber, studentname, department, date,
@@ -2141,22 +2355,32 @@ async def scan_attendance(request: ScanRequest, current_user: Optional[dict] = D
                         )
                         VALUES (%s, %s, %s, %s, %s, 'Pending', 'Present', %s, %s,
                                 %s, %s, %s, %s, %s, 'face+liveness+geofence')
-                        ON CONFLICT(sessionid, rollnumber) WHERE sessionid IS NOT NULL
-                        DO UPDATE SET status='Present', timein=%s, markedby=%s,
-                            submitted_latitude=%s, submitted_longitude=%s,
-                            location_accuracy=%s, distance_meters=%s,
-                            face_confidence=%s, verification_method='face+liveness+geofence'
                     """, (
                         roll, friendly_name, dept, today_local, utc_now_iso,
                         marked_by_str, session_id, request.latitude, request.longitude,
                         request.locationAccuracy, session_context.get("distance_meters") if session_context else None,
                         max(0.0, 1.0 - float(match["distance"])),
-                        utc_now_iso, marked_by_str, request.latitude, request.longitude,
-                        request.locationAccuracy, session_context.get("distance_meters") if session_context else None,
-                        max(0.0, 1.0 - float(match["distance"])),
                     ))
-                    conn.commit()
-                    face_info["marked"] = True
+                else:
+                    current_status = existing_row["status"]
+                    new_status = 'Absent' if current_status == 'Present' else 'Present'
+                    cursor.execute("""
+                        UPDATE attendance
+                        SET status = %s, timein = %s, markedby = %s,
+                            submitted_latitude = %s, submitted_longitude = %s,
+                            location_accuracy = %s, distance_meters = %s,
+                            face_confidence = %s, verification_method = 'face+liveness+geofence'
+                        WHERE rollnumber = %s AND sessionid = %s
+                    """, (
+                        new_status, utc_now_iso, marked_by_str,
+                        request.latitude, request.longitude, request.locationAccuracy,
+                        session_context.get("distance_meters") if session_context else None,
+                        max(0.0, 1.0 - float(match["distance"])),
+                        roll, session_id
+                    ))
+                conn.commit()
+                face_info["marked"] = True
+                face_info["status"] = new_status
                 
         updated_faces.append(face_info)
         

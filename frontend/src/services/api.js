@@ -127,6 +127,15 @@ export const studentAPI = {
       body: JSON.stringify({ images: base64Images })
     });
   },
+  getReenrollStatus: async () => {
+    return request('/student/face-images/request-status');
+  },
+  requestReenroll: async (base64Images) => {
+    return request('/student/face-images/request', {
+      method: 'POST',
+      body: JSON.stringify({ images: base64Images })
+    });
+  },
 };
 
 // ── Teachers API ──────────────────────────────────────────────
@@ -235,5 +244,18 @@ export const dashboardAPI = {
 export const adminAPI = {
   getAuditLogs: async () => {
     return request('/admin/audit-logs');
+  },
+  getReenrollRequests: async () => {
+    return request('/admin/face-images/requests');
+  },
+  approveReenroll: async (requestId) => {
+    return request(`/admin/face-images/requests/${requestId}/approve`, {
+      method: 'POST'
+    });
+  },
+  rejectReenroll: async (requestId) => {
+    return request(`/admin/face-images/requests/${requestId}/reject`, {
+      method: 'POST'
+    });
   }
 };

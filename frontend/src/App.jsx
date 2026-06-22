@@ -139,8 +139,17 @@ function StudentLayout() {
         const res = await attendanceAPI.getSessions();
         const active = (res.sessions || []).filter(s => s.isActive);
         
+        const localDate = new Date();
+        const year = localDate.getFullYear();
+        const month = String(localDate.getMonth() + 1).padStart(2, '0');
+        const day = String(localDate.getDate()).padStart(2, '0');
+        const todayStr = `${year}-${month}-${day}`;
+
         // Find newly active sessions
         active.forEach(session => {
+          const isMarked = logs.some(l => l.date === todayStr && l.type && l.type.includes(session.classCode) && l.status === 'Present');
+          if (isMarked) return;
+
           if (!notifiedSessions.current.has(session.classCode) && !readSessionCodesRef.current.has(session.classCode)) {
             // Trigger Ant Design Notification toast
             notification.info({
@@ -181,9 +190,17 @@ function StudentLayout() {
     fetchSessions();
     const interval = setInterval(fetchSessions, 8000);
     return () => clearInterval(interval);
-  }, [navigate]);
+  }, [navigate, logs]);
 
-  const unreadActiveSessions = activeSessions.filter(session => !readSessionCodes.has(session.classCode));
+  const unreadActiveSessions = activeSessions.filter(session => {
+    const localDate = new Date();
+    const year = localDate.getFullYear();
+    const month = String(localDate.getMonth() + 1).padStart(2, '0');
+    const day = String(localDate.getDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`;
+    const isMarked = logs.some(l => l.date === todayStr && l.type && l.type.includes(session.classCode) && l.status === 'Present');
+    return !isMarked && !readSessionCodes.has(session.classCode);
+  });
 
   return (
     <div className={`app-layout ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'} ${theme}`}>

@@ -81,3 +81,50 @@ def _save_locally(img_data: bytes, filename: str) -> str:
     
     # Return endpoint path matching FastAPI StaticFiles
     return f"{HOST_URL.rstrip('/')}/static/uploads/{filename}"
+
+def promote_pending_photo(roll_number: str) -> str:
+    filename_pending = f"pending_{roll_number.replace('/', '_')}.jpg"
+    filename_permanent = f"{roll_number.replace('/', '_')}.jpg"
+    
+    if is_s3_configured():
+        try:
+            # Create S3 client (compatible with R2, Supabase, etc.)
+            s3_client = boto3.client(
+                's3',
+                endpoint_url=S3_ENDPOINT_URL,
+                aws_access_key_id=S3_ACCESS_KEY_ID,
+                aws_secret_access_key=S3_SECRET_ACCESS_KEY,
+                config=Config(signature_version='s3v4')
+            )
+            s3_client.copy_object(
+                Bucket=S3_BUCKET,
+                CopySource={'Bucket': S3_BUCKET, 'Key': filename_pending},
+                Key=filename_permanent
+            )
+            try:
+                s3_client.delete_object(Bucket=S3_BUCKET, Key=filename_pending)
+            except Exception:
+                pass
+            if S3_PUBLIC_URL_TEMPLATE:
+                return S3_PUBLIC_URL_TEMPLATE.format(bucket=S3_BUCKET, key=filename_permanent)
+            else:
+                if "r2.cloudflarestorage.com" in S3_ENDPOINT_URL:
+                    account_id = S3_ENDPOINT_URL.split("//")[1].split(".")[0]
+                    return f"https://{S3_BUCKET}.{account_id}.r2.dev/{filename_permanent}"
+                else:
+                    return f"{S3_ENDPOINT_URL.rstrip('/')}/{S3_BUCKET}/{filename_permanent}"
+        except Exception as e:
+            print(f"S3 promote failed: {e}. Falling back to local promotion.")
+    
+    # Local fallback
+    path_pending = LOCAL_UPLOAD_DIR / filename_pending
+    path_permanent = LOCAL_UPLOAD_DIR / filename_permanent
+    if path_pending.exists():
+        import shutil
+        shutil.copyfile(path_pending, path_permanent)
+        try:
+            path_pending.unlink()
+        except Exception:
+            pass
+    return f"{HOST_URL.rstrip('/')}/static/uploads/{filename_permanent}"
+

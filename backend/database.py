@@ -313,6 +313,20 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS face_reenroll_requests (
+        id SERIAL PRIMARY KEY,
+        student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+        rollnumber TEXT NOT NULL,
+        fullname TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        proposed_photo TEXT NOT NULL,
+        proposed_embedding VECTOR(128) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+
 
     # Seed/refresh active sessions. CS-* codes keep department + semester filtering simple.
     classes = [
