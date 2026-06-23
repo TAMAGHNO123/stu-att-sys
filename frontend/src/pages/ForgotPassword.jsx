@@ -35,16 +35,22 @@ export default function ForgotPassword() {
     try {
       const result = await authAPI.forgotPassword(email);
 
-      setSent(true);
-      message.success(result.message);
-
-      // Dev/debug flow (kept from old version)
-      if (result.debugResetToken) {
-        navigate(
-          `/reset-password?token=${encodeURIComponent(
-            result.debugResetToken
-          )}`
-        );
+      if (result.delivery === "development") {
+        if (result.debugResetToken) {
+          message.info("Redirecting to reset page (Development Mode)...");
+          navigate(
+            `/reset-password?token=${encodeURIComponent(
+              result.debugResetToken
+            )}`
+          );
+        } else {
+          message.warning(
+            "Email delivery failed or is not configured. The reset link has been printed to the backend console."
+          );
+        }
+      } else {
+        setSent(true);
+        message.success(result.message);
       }
     } catch (error) {
       message.error(

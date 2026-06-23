@@ -715,13 +715,19 @@ def send_password_reset_email(recipient: str, reset_url: str):
     message["To"] = recipient
     message.set_content(f"Reset your password within 15 minutes:\n\n{reset_url}\n\nIgnore this message if you did not request it.")
     port = int(os.environ.get("SMTP_PORT", "587"))
-    with smtplib.SMTP(host, port, timeout=10) as smtp:
-        smtp.starttls()
-        username = os.environ.get("SMTP_USERNAME")
-        password = os.environ.get("SMTP_PASSWORD")
-        if username and password:
-            smtp.login(username, password)
-        smtp.send_message(message)
+    username = os.environ.get("SMTP_USERNAME")
+    password = os.environ.get("SMTP_PASSWORD")
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=10) as smtp:
+            if username and password:
+                smtp.login(username, password)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(host, port, timeout=10) as smtp:
+            smtp.starttls()
+            if username and password:
+                smtp.login(username, password)
+            smtp.send_message(message)
     return True
 
 
