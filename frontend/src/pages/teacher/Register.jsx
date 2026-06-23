@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "antd";
 import { message, notification } from "../../components/AntdGlobalHelper";
 import "../Register.css";
+import { DEPARTMENTS } from "../../data/dummyData";
 import { authAPI } from "../../services/api";
 
 const TeacherRegister = () => {
@@ -383,12 +384,9 @@ const TeacherRegister = () => {
                 <label>Department</label>
                 <select name="department" value={formData.department} onChange={handleChange} required>
                   <option value="">Select Department</option>
-                  <option>Computer Science</option>
-                  <option>Information Technology</option>
-                  <option>Electronics & Communication</option>
-                  <option>Mechanical Engineering</option>
-                  <option>Civil Engineering</option>
-                  <option>Electrical Engineering</option>
+                  {DEPARTMENTS.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
                 </select>
               </div>
               <div className="register-field">

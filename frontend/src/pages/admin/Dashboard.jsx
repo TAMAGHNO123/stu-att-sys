@@ -25,7 +25,16 @@ import {
   CardBody,
   CardHeader,
   Stack,
-  Flex
+  Flex,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalFooter,
+  ModalBody,
+  ModalCloseButton,
+  Image,
+  Divider
 } from '@chakra-ui/react';
 import { RefreshCw } from 'lucide-react';
 import { dashboardAPI, teacherAPI, adminAPI, studentAPI } from '../../services/api';
@@ -38,19 +47,28 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [masterRoster, setMasterRoster] = useState([]);
+  const [reenrollRequests, setReenrollRequests] = useState([]);
+  const [selectedRequest, setSelectedRequest] = useState(null);
+  const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const toast = useToast();
 
   const loadData = async () => {
     try {
-      const [statsData, teacherData, logsData, studentData] = await Promise.all([
+      const [statsData, teacherData, logsData, studentData, reenrollData] = await Promise.all([
         dashboardAPI.getStats(),
         teacherAPI.getAll(),
         adminAPI.getAuditLogs(),
-        studentAPI.getAll()
+        studentAPI.getAll(),
+        adminAPI.getReenrollRequests().catch(err => {
+          console.error("Failed to load re-enroll requests:", err);
+          return { requests: [] };
+        })
       ]);
       setStats(statsData);
       setTeachersCount(teacherData.total || 0);
       setLogs(logsData.logs || []);
+      setReenrollRequests(reenrollData.requests || []);
 
       // Build master roster from real DB data
       const students = (studentData.data || []).map(s => ({
@@ -97,6 +115,63 @@ export default function AdminDashboard() {
       duration: 3000,
       isClosable: true
     });
+  };
+
+  const handleOpenVerifyModal = (req) => {
+    setSelectedRequest(req);
+    setIsVerifyModalOpen(true);
+  };
+
+  const handleApprove = async (requestId) => {
+    setActionLoading(true);
+    try {
+      await adminAPI.approveReenroll(requestId);
+      toast({
+        title: 'Request Approved',
+        description: 'Face ID successfully updated for the student.',
+        status: 'success',
+        duration: 4000,
+        isClosable: true
+      });
+      setIsVerifyModalOpen(false);
+      loadData();
+    } catch (err) {
+      toast({
+        title: 'Approval Failed',
+        description: err.message || 'Error occurred during approval.',
+        status: 'error',
+        duration: 4000,
+        isClosable: true
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReject = async (requestId) => {
+    setActionLoading(true);
+    try {
+      await adminAPI.rejectReenroll(requestId);
+      toast({
+        title: 'Request Rejected',
+        description: 'Face ID re-enrollment request has been dismissed.',
+        status: 'info',
+        duration: 4000,
+        isClosable: true
+      });
+      setIsVerifyModalOpen(false);
+      loadData();
+    } catch (err) {
+      toast({
+        title: 'Rejection Failed',
+        description: err.message || 'Error occurred during rejection.',
+        status: 'error',
+        duration: 4000,
+        isClosable: true
+      });
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   if (loading) {
@@ -173,6 +248,202 @@ export default function AdminDashboard() {
           </CardBody>
         </Card>
       </SimpleGrid>
+
+      {/* Face Re-enrollment Approvals Card */}
+      {reenrollRequests.length > 0 && (
+        <Card borderRadius="xl" shadow="sm" bg="var(--bg-secondary)" border="1px solid" borderColor="orange.200" overflow="hidden" mb={8}>
+          <Box p={5} borderBottom="1px solid" borderColor="orange.100" bg="orange.50">
+            <Heading size="md" color="orange.800">Pending Face Re-enrollment Approvals</Heading>
+            <Text fontSize="xs" color="orange.600">Verify new face scans against original face records before updating user credentials</Text>
+          </Box>
+          <CardBody p={0} overflowX="auto">
+            <Table variant="striped" colorScheme="orange" size="md">
+              <Thead bg="orange.50">
+                <Tr>
+                  <Th fontSize="xs" color="orange.700" fontWeight="bold">Name</Th>
+                  <Th fontSize="xs" color="orange.700" fontWeight="bold">Roll Number</Th>
+                  <Th fontSize="xs" color="orange.700" fontWeight="bold">Date Requested</Th>
+                  <Th fontSize="xs" color="orange.700" fontWeight="bold" textAlign="right">Action</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {reenrollRequests.map((req) => (
+                  <Tr key={req.id}>
+                    <Td fontWeight="semibold" color="gray.800">{req.fullName}</Td>
+                    <Td color="gray.600">{req.rollNumber}</Td>
+                    <Td color="gray.500" fontSize="sm">
+                      {req.createdAt ? new Date(req.createdAt).toLocaleString() : '-'}
+                    </Td>
+                    <Td textAlign="right">
+                      <Button
+                        size="sm"
+                        colorScheme="orange"
+                        onClick={() => handleOpenVerifyModal(req)}
+                      >
+                        Verify Face ID
+                      </Button>
+                    </Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Verify Face ID Modal */}
+      <Modal isOpen={isVerifyModalOpen} onClose={() => setIsVerifyModalOpen(false)} size="xl" isCentered>
+        <ModalOverlay />
+        <ModalContent borderRadius="xl">
+          <ModalHeader borderBottom="1px solid" borderColor="gray.100" py={4}>
+            <Heading size="md" color="gray.800">Verify Face ID Re-enrollment</Heading>
+            <Text fontSize="xs" color="gray.500" mt={1}>Comparing captured credentials for {selectedRequest?.fullName}</Text>
+          </ModalHeader>
+          <ModalCloseButton />
+          
+          <ModalBody py={6}>
+            {selectedRequest && (
+              <Stack spacing={6}>
+                {/* Side-by-Side Photos */}
+                <SimpleGrid columns={2} spacing={6}>
+                  <Box>
+                    <Text fontWeight="semibold" fontSize="sm" color="gray.600" mb={2} textAlign="center">
+                      Original Profile Photo
+                    </Text>
+                    <Box
+                      borderRadius="lg"
+                      overflow="hidden"
+                      border="2px solid"
+                      borderColor="gray.200"
+                      bg="gray.100"
+                      height="200px"
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                    >
+                      {selectedRequest.originalPhoto ? (
+                        <Image
+                          src={selectedRequest.originalPhoto}
+                          alt="Original"
+                          objectFit="cover"
+                          height="100%"
+                          width="100%"
+                          fallbackSrc="https://i.pravatar.cc/150?img=99"
+                        />
+                      ) : (
+                        <Text fontSize="sm" color="gray.400">No Original Photo</Text>
+                      )}
+                    </Box>
+                  </Box>
+
+                  <Box>
+                    <Text fontWeight="semibold" fontSize="sm" color="orange.600" mb={2} textAlign="center">
+                      Proposed Face Scan
+                    </Text>
+                    <Box
+                      borderRadius="lg"
+                      overflow="hidden"
+                      border="2px solid"
+                      borderColor="orange.200"
+                      bg="orange.50"
+                      height="200px"
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                    >
+                      <Image
+                        src={selectedRequest.proposedPhoto}
+                        alt="Proposed"
+                        objectFit="cover"
+                        height="100%"
+                        width="100%"
+                      />
+                    </Box>
+                  </Box>
+                </SimpleGrid>
+
+                <Divider />
+
+                {/* Biometric Comparison stats */}
+                <Box
+                  p={4}
+                  borderRadius="lg"
+                  bg={selectedRequest.distance !== null && selectedRequest.distance <= 0.48 ? "green.50" : "red.50"}
+                  border="1px solid"
+                  borderColor={selectedRequest.distance !== null && selectedRequest.distance <= 0.48 ? "green.200" : "red.200"}
+                >
+                  <Heading
+                    size="xs"
+                    color={selectedRequest.distance !== null && selectedRequest.distance <= 0.48 ? "green.800" : "red.800"}
+                    textTransform="uppercase"
+                    mb={3}
+                  >
+                    Biometric Vector Inference
+                  </Heading>
+                  
+                  <SimpleGrid columns={2} spacing={4}>
+                    <Box>
+                      <Text fontSize="xs" color="gray.500">Vector Distance (L2)</Text>
+                      <Text fontSize="lg" fontWeight="bold" color="gray.700">
+                        {selectedRequest.distance !== null ? selectedRequest.distance.toFixed(4) : "N/A"}
+                      </Text>
+                    </Box>
+                    <Box>
+                      <Text fontSize="xs" color="gray.500">Similarity Confidence</Text>
+                      <Text fontSize="lg" fontWeight="bold" color="gray.700">
+                        {selectedRequest.distance !== null
+                          ? `${Math.max(0, Math.min(100, Math.round((1 - selectedRequest.distance) * 100)))}%`
+                          : "N/A"}
+                      </Text>
+                    </Box>
+                  </SimpleGrid>
+
+                  <Box mt={3} pt={3} borderTop="1px solid" borderColor={selectedRequest.distance !== null && selectedRequest.distance <= 0.48 ? "green.200" : "red.200"}>
+                    <Flex align="center" gap={2}>
+                      <Badge
+                        colorScheme={selectedRequest.distance !== null && selectedRequest.distance <= 0.48 ? "green" : "red"}
+                        variant="solid"
+                        px={2.5}
+                        py={0.5}
+                        borderRadius="full"
+                      >
+                        {selectedRequest.distance !== null && selectedRequest.distance <= 0.48 ? "MATCH CONFIRMED" : "MISMATCH WARNING"}
+                      </Badge>
+                      <Text fontSize="xs" color="gray.600" fontWeight="medium">
+                        {selectedRequest.distance !== null && selectedRequest.distance <= 0.48
+                          ? "Biometric characteristics match the original enrollment record."
+                          : "Inference score indicates characteristics deviate significantly from original enrollment."}
+                      </Text>
+                    </Flex>
+                  </Box>
+                </Box>
+              </Stack>
+            )}
+          </ModalBody>
+
+          <ModalFooter borderTop="1px solid" borderColor="gray.100" gap={3}>
+            <Button
+              colorScheme="red"
+              variant="outline"
+              onClick={() => handleReject(selectedRequest.id)}
+              isLoading={actionLoading}
+              mr="auto"
+            >
+              Reject Request
+            </Button>
+            <Button variant="ghost" onClick={() => setIsVerifyModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              colorScheme="green"
+              onClick={() => handleApprove(selectedRequest.id)}
+              isLoading={actionLoading}
+            >
+              Approve & Save Face ID
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       {/* Roster Management Table Container */}
       <Card borderRadius="xl" shadow="sm" bg="var(--bg-secondary)" border="1px solid var(--border-color)" overflow="hidden">

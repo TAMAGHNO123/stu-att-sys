@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button, Steps } from "antd";
 import { message, notification } from "../components/AntdGlobalHelper";
 import { authAPI } from "../services/api";
+import { DEPARTMENTS } from "../data/dummyData";
 import "./Register.css";
 
 const { Step } = Steps;
@@ -384,11 +385,9 @@ const Register = () => {
                     <label>Department</label>
                     <select name="department" value={formData.department} onChange={handleChange} required className={errors.department ? "input-error" : ""}>
                       <option value="">Select Department</option>
-                      <option>Computer Science</option>
-                      <option>Information Technology</option>
-                      <option>Electronics</option>
-                      <option>Mechanical</option>
-                      <option>Civil</option>
+                      {DEPARTMENTS.map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
                     </select>
                     {errors.department && <p className="error-msg">{errors.department}</p>}
                   </div>

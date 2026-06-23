@@ -231,38 +231,35 @@ export default function StudentWebcam() {
 
           // Auto mark if recognized and live
           if (name !== 'Unknown' && is_live && identity_verified) {
-            // Check if already marked for this class session in local UI state
             const localDate = new Date();
             const year = localDate.getFullYear();
             const month = String(localDate.getMonth() + 1).padStart(2, '0');
             const day = String(localDate.getDate()).padStart(2, '0');
             const todayStr = `${year}-${month}-${day}`;
-            const alreadyMarked = logs.some(l => l.date === todayStr && l.type && l.type.includes(classCode));
 
-            if (alreadyMarked || !face.marked) {
-              primaryWarning = { text: `Attendance already logged for ${classCode} today!`, type: "warning" };
+            if (!face.marked) {
+              primaryWarning = { text: `Attendance registration failed!`, type: "warning" };
               stopCamera();
               setSelectedClass('');
               attendanceCompletedRef.current = true;
-              message.info(`Attendance already logged for ${classCode} today`);
+              message.error(`Attendance registration failed`);
               return;
             }
 
+            const status = face.status || 'Present';
             const newRecord = {
               key: String(logs.length + 1),
               date: todayStr,
-              status: 'Present',
+              status: status,
               type: `Face ID (${classCode})`,
             };
 
             setLogs(prev => [newRecord, ...prev]);
-            setPresentCount(prev => prev + 1);
-            setTotalClasses(prev => prev + 1);
 
             attendanceCompletedRef.current = true;
-            setScanWarning({ text: `Attendance marked successfully for ${classCode}`, type: "success" });
+            setScanWarning({ text: `Attendance updated to ${status} for ${classCode}`, type: "success" });
             dismissSessionNotification?.(classCode);
-            message.success(`Attendance marked successfully for ${classCode}`);
+            message.success(`Attendance marked as ${status} successfully for ${classCode}`);
             fetchStudentData?.();
             stopCamera();
             setSelectedClass('');
